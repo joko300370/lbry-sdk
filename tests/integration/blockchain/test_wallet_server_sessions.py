@@ -87,3 +87,33 @@ class TestUsagePayment(CommandTestCase):
         self.assertIsNotNone(await self.blockchain.get_raw_transaction(tx.id))  # verify its broadcasted
         self.assertEqual(tx.outputs[0].amount, 100000000)
         self.assertEqual(tx.outputs[0].get_address(self.ledger), address)
+
+
+class TestHubDiscovery(CommandTestCase):
+
+    async def test_hub_discovery(self):
+        final_node = SPVNode(self.conductor.spv_module, node_number=2)
+        await final_node.start(self.blockchain)
+        self.addCleanup(final_node.stop)
+        final_node_host = f"{final_node.hostname}:{final_node.port}"
+
+        relay_node = SPVNode(self.conductor.spv_module, node_number=3)
+        await relay_node.start(self.blockchain, extraconf={"PEER_HUBS": final_node_host})
+        relay_node_host = f"{relay_node.hostname}:{relay_node.port}"
+        self.addCleanup(relay_node.stop)
+
+        self.assertEqual(list(self.daemon.conf.known_hubs), [])
+        self.daemon.conf.known_hubs.append(relay_node_host)
+
+        self.assertEqual(
+            self.daemon.ledger.network.client.server_address_and_port,
+            ('127.0.0.1', 50002)
+        )
+
+        await self.daemon.jsonrpc_wallet_reconnect()
+
+        self.assertEqual(
+            self.daemon.ledger.network.client.server_address_and_port,
+            ('127.0.0.1', 50003)
+        )
+
