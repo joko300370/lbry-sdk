@@ -430,6 +430,22 @@ class ClaimSearchCommand(ClaimTestCase):
             limit_claims_per_channel=1, claim_type='stream', order_by=['^height']
         )
 
+    async def test_limit_reposts_per_claim_across_sorted_pages(self):
+        await self.generate(10)
+        match = self.assertFindsClaims
+        claims = []
+        first = await self.stream_create('original_claim0')
+        second = await self.stream_create('original_claim1')
+        for i in range(10):
+            repost_id = self.get_claim_id(second if i % 2 == 0 else first)
+            channel_id = self.get_claim_id(await self.channel_create(f'@chan{i}', bid='0.001'))
+            claims.append(
+                await self.stream_repost(repost_id, f'claim{i}', bid='0.001', channel_id=channel_id))
+        await match(
+            [first, second, claims[0], claims[1]], page_size=20,  # 20 is allowed but we get only 4
+            limit_reposts_per_claim=1, order_by=['^height']
+        )
+
     async def test_claim_type_and_media_type_search(self):
         # create an invalid/unknown claim
         address = await self.account.receiving.get_or_create_usable_address()
