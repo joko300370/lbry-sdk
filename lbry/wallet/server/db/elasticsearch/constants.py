@@ -59,3 +59,4 @@ REPLACEMENTS = {
     'txid': 'tx_id',
     'claim_hash': '_id'
 }
+LIMITING_FIELDS = {'limit_claims_per_channel', 'limit_reposts_per_claim'}

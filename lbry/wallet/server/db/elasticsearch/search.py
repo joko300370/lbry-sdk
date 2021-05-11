@@ -17,7 +17,7 @@ from lbry.schema.url import URL, normalize_name
 from lbry.utils import LRUCache
 from lbry.wallet.server.db.common import CLAIM_TYPES, STREAM_TYPES
 from lbry.wallet.server.db.elasticsearch.constants import INDEX_DEFAULT_SETTINGS, REPLACEMENTS, FIELDS, TEXT_FIELDS, \
-    RANGE_FIELDS
+    RANGE_FIELDS, LIMITING_FIELDS
 from lbry.wallet.server.util import class_logger
 
 
@@ -249,24 +249,26 @@ class SearchIndex:
             if not kwargs['channel_id'] or not isinstance(kwargs['channel_id'], str):
                 return [], 0, 0
         try:
-            if 'limit_claims_per_channel' in kwargs:
-                return await self.search_ahead(**kwargs), 0, 0
-            else:
+            if kwargs.keys().isdisjoint(LIMITING_FIELDS):
                 result = (await self.search_client.search(
                     expand_query(**kwargs), index=self.index,
                     track_total_hits=False if kwargs.get('no_totals') else 10_000
                 ))['hits']
+            else:
+                return await self.search_ahead(**kwargs), 0, 0
         except NotFoundError:
             return [], 0, 0
         return expand_result(result['hits']), 0, result.get('total', {}).get('value', 0)
 
     async def search_ahead(self, **kwargs):
         # 'limit_claims_per_channel' case. Fetch 1000 results, reorder, slice, inflate and return
-        per_channel_per_page = kwargs.pop('limit_claims_per_channel')
+        per_channel_per_page = kwargs.pop('limit_claims_per_channel', None)
+        reposts_per_claim = kwargs.pop('limit_reposts_per_claim', None)
         page_size = kwargs.pop('limit', 10)
         offset = kwargs.pop('offset', 0)
         kwargs['limit'] = 1000
-        cache_item = ResultCacheItem.from_cache(f"ahead{per_channel_per_page}{kwargs}", self.search_cache)
+        cache_key = f"ahead{per_channel_per_page}{kwargs}"
+        cache_item = ResultCacheItem.from_cache(cache_key, self.search_cache)
         if cache_item.result is not None:
             reordered_hits = cache_item.result
         else:
@@ -275,15 +277,18 @@ class SearchIndex:
                     reordered_hits = cache_item.result
                 else:
                     query = expand_query(**kwargs)
-                    reordered_hits = await self.__search_ahead(query, page_size, per_channel_per_page)
+                    reordered_hits = await self.__search_ahead(query, page_size, per_channel_per_page,
+                                                               reposts_per_claim)
                     cache_item.result = reordered_hits
         return list(await self.get_many(*(claim_id for claim_id, _ in reordered_hits[offset:(offset + page_size)])))
 
-    async def __search_ahead(self, query: dict, page_size: int, per_channel_per_page: int):
+    async def __search_ahead(self, query: dict, page_size: int, per_channel_per_page: Optional[int] = None,
+                             reposts_per_claim: Optional[int] = None):
         search_hits = deque((await self.search_client.search(
-            query, index=self.index, track_total_hits=False, _source_includes=['_id', 'channel_id']
+            query, index=self.index, track_total_hits=False, _source_includes=['_id', 'channel_id', 'reposted_claim_id']
         ))['hits']['hits'])
         reordered_hits = []
+        repost_counters = Counter()
         channel_counters = Counter()
         next_page_hits_maybe_check_later = deque()
         while search_hits or next_page_hits_maybe_check_later:
@@ -295,7 +300,7 @@ class SearchIndex:
                 break  # means last page was incomplete and we are left with bad replacements
             for _ in range(len(next_page_hits_maybe_check_later)):
                 claim_id, channel_id = next_page_hits_maybe_check_later.popleft()
-                if channel_counters[channel_id] < per_channel_per_page:
+                if per_channel_per_page is None or channel_counters[channel_id] < per_channel_per_page:
                     reordered_hits.append((claim_id, channel_id))
                     channel_counters[channel_id] += 1
                 else:
@@ -303,9 +308,15 @@ class SearchIndex:
             while search_hits:
                 hit = search_hits.popleft()
                 hit_id, hit_channel_id = hit['_id'], hit['_source']['channel_id']
+                hit_reposted_claim_id = hit['_source']['reposted_claim_id']
+                if reposts_per_claim is not None and hit_reposted_claim_id is not None:
+                    if repost_counters[hit_reposted_claim_id] >= reposts_per_claim:
+                        continue  # dropped
+                    else:
+                        repost_counters[hit_reposted_claim_id] += 1
                 if hit_channel_id is None:
                     reordered_hits.append((hit_id, hit_channel_id))
-                elif channel_counters[hit_channel_id] < per_channel_per_page:
+                elif per_channel_per_page is None or channel_counters[hit_channel_id] < per_channel_per_page:
                     reordered_hits.append((hit_id, hit_channel_id))
                     channel_counters[hit_channel_id] += 1
                     if len(reordered_hits) % page_size == 0:
