@@ -2333,6 +2333,7 @@ class Daemon(metaclass=JSONRPCServerType):
                              [[--channel_ids=<channel_ids>...] [--not_channel_ids=<not_channel_ids>...]]]
                          [--has_channel_signature] [--valid_channel_signature | --invalid_channel_signature]
                          [--limit_claims_per_channel=<limit_claims_per_channel>]
+                         [--limit_reposts_per_claim=<limit_reposts_per_claim>]
                          [--is_controlling] [--release_time=<release_time>] [--public_key_id=<public_key_id>]
                          [--timestamp=<timestamp>] [--creation_timestamp=<creation_timestamp>]
                          [--height=<height>] [--creation_height=<creation_height>]
@@ -2384,6 +2385,8 @@ class Daemon(metaclass=JSONRPCServerType):
                                                      only get claims with invalid signatures
             --limit_claims_per_channel=<limit_claims_per_channel>: (int) only return up to the specified
                                                                          number of claims per channel
+            --limit_reposts_per_claim=<limit_reposts_per_claim>: (int) only return up to the specified
+                                                                         number of reposts per claim
             --is_controlling                : (bool) winning claims of their respective name
             --public_key_id=<public_key_id> : (str) only return channels having this public key id, this is
                                                     the same key as used in the wallet file to map
